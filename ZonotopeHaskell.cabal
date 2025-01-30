@@ -82,7 +82,9 @@ executable ZonotopeHaskell
         vector,
         matrix,
         -- time ^>=1.12.2,
-        aeson ^>=2.1.0.0
+        aeson ^>=2.1.0.0,
+        poly,
+        vector-sized
 
     -- Directories containing source files.
     hs-source-dirs:   app

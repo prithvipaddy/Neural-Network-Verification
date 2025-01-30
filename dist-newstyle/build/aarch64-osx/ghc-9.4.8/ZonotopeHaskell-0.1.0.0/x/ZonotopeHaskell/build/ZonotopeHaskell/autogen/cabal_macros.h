@@ -50,6 +50,16 @@
   (major1) == 0 && (major2) <  3 || \
   (major1) == 0 && (major2) == 3 && (minor) <= 6)
 #endif /* MIN_VERSION_matrix */
+/* package poly-0.5.1.0 */
+#ifndef VERSION_poly
+#define VERSION_poly "0.5.1.0"
+#endif /* VERSION_poly */
+#ifndef MIN_VERSION_poly
+#define MIN_VERSION_poly(major1,major2,minor) (\
+  (major1) <  0 || \
+  (major1) == 0 && (major2) <  5 || \
+  (major1) == 0 && (major2) == 5 && (minor) <= 1)
+#endif /* MIN_VERSION_poly */
 /* package random-1.2.1.3 */
 #ifndef VERSION_random
 #define VERSION_random "1.2.1.3"
@@ -80,6 +90,16 @@
   (major1) == 0 && (major2) <  13 || \
   (major1) == 0 && (major2) == 13 && (minor) <= 2)
 #endif /* MIN_VERSION_vector */
+/* package vector-sized-1.6.1 */
+#ifndef VERSION_vector_sized
+#define VERSION_vector_sized "1.6.1"
+#endif /* VERSION_vector_sized */
+#ifndef MIN_VERSION_vector_sized
+#define MIN_VERSION_vector_sized(major1,major2,minor) (\
+  (major1) <  1 || \
+  (major1) == 1 && (major2) <  6 || \
+  (major1) == 1 && (major2) == 6 && (minor) <= 1)
+#endif /* MIN_VERSION_vector_sized */
 
 /* tool gcc-16.0.0 */
 #ifndef TOOL_VERSION_gcc
