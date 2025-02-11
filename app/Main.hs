@@ -7,14 +7,15 @@
 module Main where
 
 import Data.List (maximumBy,transpose)
-import Data.Aeson (FromJSON, decode)
-import qualified Data.ByteString.Lazy as B (readFile)
+import Data.Aeson (FromJSON, decode, encode)
+import qualified Data.ByteString.Lazy as B (readFile, writeFile)
 import GHC.Generics (Generic)
 import Data.Ord (comparing)
 import Data.Vector (toList)
 import Data.Matrix
 import Data.Maybe (fromMaybe)
-import Data.Poly
+
+type Zonotope = Matrix Double
 
 data LayerInfo = LayerInfo
   { layerName          :: String
@@ -69,33 +70,33 @@ generateWeightMatrixForConv kernel (inpImgRows,inpImgCols) =
     -- i and j determine the row corresponding to element (i,j) from y
    in [ generateRowWeightMatrixForConv kernel (inpImgRows,inpImgCols) i j | i <- [0 .. yRows - 1], j <- [0 .. yCols - 1] ]
 
-generateBiasMatrixForConv :: Matrix (UPoly Double) -> Double -> Matrix Double
+generateBiasMatrixForConv :: Matrix Double -> Double -> Matrix Double
 generateBiasMatrixForConv z b = matrix (nrows z) (ncols z) (const b)
 
-applySingleChannelConvolution :: Matrix (UPoly Double) -> (Int,Int) -> [[Double]] -> Matrix (UPoly Double)
+applySingleChannelConvolution :: Matrix Double -> (Int,Int) -> [[Double]] -> Matrix Double
 applySingleChannelConvolution zonotope (inpImgRows,inpImgCols) kernel = let
-    wF = convertToUPolyMatrix 0 (Data.Matrix.fromLists (generateWeightMatrixForConv kernel (inpImgRows,inpImgCols)))
+    wF = Data.Matrix.fromLists (generateWeightMatrixForConv kernel (inpImgRows,inpImgCols))
     newZonotope = Data.Matrix.multStd wF zonotope
     in newZonotope
 
 -- scalar composotion of the entire depth of the zonotopes to form a single zonotope
 -- one scalar composition for each filter 
 -- eg. if initial depth = 3, newZ is sum of the 3 zonotopes, and if numFilters = 32, new depth = 32
-applyConvolutionPerFilter' :: [Matrix (UPoly Double)] -> (Int,Int) -> [[[Double]]] -> Int -> Int -> Matrix (UPoly Double)
+applyConvolutionPerFilter' :: [Matrix Double] -> (Int,Int) -> [[[Double]]] -> Int -> Int -> Matrix Double
 applyConvolutionPerFilter' [] _ _ zRowSize zColSize = Data.Matrix.zero zRowSize zColSize
 applyConvolutionPerFilter' _ _ [] zRowSize zColSize = Data.Matrix.zero zRowSize zColSize
 applyConvolutionPerFilter' (z:zonotope) (inpImgRows,inpImgCols) (k:kernel) zRowSize zColSize  = let
     newZ = applySingleChannelConvolution z (inpImgRows,inpImgCols) k
     in newZ + applyConvolutionPerFilter' zonotope (inpImgRows,inpImgCols) kernel zRowSize zColSize
 
-applyConvolutionPerFilter :: [Matrix (UPoly Double)] -> (Int,Int) -> [[[Double]]] -> Double -> Matrix (UPoly Double)
+applyConvolutionPerFilter :: [Matrix Double] -> (Int,Int) -> [[[Double]]] -> Double -> Matrix Double
 applyConvolutionPerFilter zonotope (inpImgRows,inpImgCols) kernel bias = let
     convolved = applyConvolutionPerFilter' zonotope (inpImgRows,inpImgCols) kernel (nrows (head zonotope)) (ncols (head zonotope))
-    biasMatrix = convertToUPolyMatrix 0 (generateBiasMatrixForConv convolved bias)
+    biasMatrix = generateBiasMatrixForConv convolved bias
     final = convolved + biasMatrix
     in final
 
-applyConvolution :: [Matrix (UPoly Double)] -> (Int,Int) -> [[[[Double]]]] -> [Double] -> [Matrix (UPoly Double)]
+applyConvolution :: [Matrix Double] -> (Int,Int) -> [[[[Double]]]] -> [Double] -> [Matrix Double]
 applyConvolution _ _ [] _ = []
 applyConvolution _ _ _ [] = []
 -- length of kernel and bias should be same
@@ -103,8 +104,8 @@ applyConvolution zonotope (inpImgRows,inpImgCols) (k:kernel) (b:bias) = applyCon
 
 -- MAXPOOLING (from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8418593)
 -- Generate the list of indices grouped for maxpooling
-maxPoolingGroups :: Int -> Int -> [[UPoly Double]] -> [[Int]]
-maxPoolingGroups p q x =
+poolingGroups :: Int -> Int -> [[Double]] -> [[Int]]
+poolingGroups p q x =
   let rows = length x
       cols = length (head x)
       -- groupIndices finds the indices for all elements in a pooling box.
@@ -113,12 +114,21 @@ maxPoolingGroups p q x =
       -- Below, the groupIndices for the top-left element of every pooling group is found
    in [ groupIndices (i * p) (j * q) | i <- [0 .. (rows `div` p) - 1], j <- [0 .. (cols `div` q) - 1] ]
 
-generateWMPMaxPooling :: Int -> Int -> [[UPoly Double]] -> [[Double]]
-generateWMPMaxPooling p q x =
+appendColumn :: Matrix a -> [a] -> Matrix a
+appendColumn mat col
+  | nrows mat /= length col = error "Column length must match the number of rows in the matrix"
+  | otherwise =
+      let
+        matRows = toLists mat
+        newMatRows = zipWith (++) (map (:[]) col) matRows  -- Append each element of the column to each row
+      in fromLists newMatRows
+
+generateWMPPooling :: Int -> Int -> [[Double]] -> [[Double]]
+generateWMPPooling p q x =
   let
       xv = concat x
       -- groupMap is a list of indices, which is used to reorder elements in xv
-      groupMap = concat (maxPoolingGroups p q x)
+      groupMap = concat (poolingGroups p q x)
       sizeX = length xv
       sizeG = length groupMap
       -- Below, the i determines which row of wMP is being generated
@@ -126,7 +136,7 @@ generateWMPMaxPooling p q x =
    in [[if i >= sizeG then 0.0 else if groupMap !! i == j then 1.0 else 0.0 | j <- [0 .. sizeX - 1]] | i <- [0 .. sizeX - 1]]
 
 {-
-Example usage of generateWMPMaxPooling
+Example usage of generateWPooling
 p = 2, q = 1
 x:
 [0,1,2,3]
@@ -149,51 +159,71 @@ this indicates that the 5th element from xv should be the 2nd element in xMP
 Similarly done, upto i = 15, and wMP is constructed.
 -}
 
-maxPooling :: Int -> Int -> [[UPoly Double]] -> [[UPoly Double]]
+maxPooling :: Int -> Int -> [[Double]] -> [Double]
 maxPooling p q x = let
     rows = length x
     cols = length (head x)
     newRows = rows `div` p
     newCols = cols `div` q
-    wMP = convertToUPolyMatrix 0 (Data.Matrix.transpose (Data.Matrix.fromLists (generateWMPMaxPooling p q x)))
+    wMP = Data.Matrix.transpose (Data.Matrix.fromLists (generateWMPPooling p q x))
     xFlat = Data.Matrix.fromLists [concat x]
     xMP' = multStd xFlat wMP
     xMP = Data.Matrix.toList xMP'
     sizeIdentity = length xMP
-    size = length (concat (maxPoolingGroups p q x))
+    size = length (concat (poolingGroups p q x))
     identity' = [[if i == j then 1 else 0 | j <- [0..sizeIdentity-1]] | i <- [0..sizeIdentity-1]]
     sublists = [take (p*q) (drop (i * p * q) xMP) | i <- [0..size `div` (p*q) - 1]]
     maxIndices = [startIdx + fst (maximumBy (comparing snd) (zip [0..] sublist)) | (startIdx, sublist) <- zip [0, p * q ..] sublists]
     selectedRows = Data.Matrix.fromLists [row | (idx, row) <- zip [0..] identity', idx `elem` maxIndices]
     maxPooledVector = Data.Matrix.toList (multStd xMP' (Data.Matrix.transpose selectedRows))
-    maxPooledMatrix = Data.Matrix.toLists (Data.Matrix.fromList newRows newCols maxPooledVector)
+    maxPooledMatrix = Data.Matrix.toList (Data.Matrix.fromList newRows newCols maxPooledVector)
     in
         maxPooledMatrix
 
-applySinglePointMaxPooling :: Int -> Int -> [UPoly Double] -> (Int,Int) -> [UPoly Double]
+applySinglePointMaxPooling :: Int -> Int -> [Double] -> (Int,Int) -> [Double]
 applySinglePointMaxPooling p q zonotope (rows,cols) = let
   x = Data.Matrix.toLists (Data.Matrix.fromList rows cols zonotope)
-  in concat (maxPooling p q x)
+  in maxPooling p q x
 
-applyAllPointsMaxPooling :: Int -> Int -> Matrix (UPoly Double) -> Int -> (Int,Int) -> Matrix (UPoly Double)
+applyAllPointsMaxPooling :: Int -> Int -> Matrix Double -> Int -> (Int,Int) -> Matrix Double
 applyAllPointsMaxPooling p q _ 0 (imgRows,imgCols) = matrix ((imgRows `div` p)*(imgCols `div` q)) 0 (const 0)
 applyAllPointsMaxPooling p q zonotope numPoints (imgRows,imgCols) = let
   point = Data.Vector.toList (getCol numPoints zonotope)
   maxPooledPoint = applySinglePointMaxPooling p q point (imgRows,imgCols)
   in appendColumn (applyAllPointsMaxPooling p q zonotope (numPoints - 1) (imgRows,imgCols)) maxPooledPoint
 
-appendColumn :: Matrix a -> [a] -> Matrix a
-appendColumn mat col
-  | nrows mat /= length col = error "Column length must match the number of rows in the matrix"
-  | otherwise =
-      let
-        matRows = toLists mat
-        newMatRows = zipWith (++) (map (:[]) col) matRows  -- Append each element of the column to each row
-      in fromLists newMatRows
-
-applyMaxPooling :: Int -> Int -> [Matrix (UPoly Double)] -> (Int,Int) -> [Matrix (UPoly Double)]
+applyMaxPooling :: Int -> Int -> [Matrix Double] -> (Int,Int) -> [Matrix Double]
 applyMaxPooling _ _ [] _ = []
 applyMaxPooling p q (z:zonotope) (imgRows,imgCols) =  applyAllPointsMaxPooling p q z (ncols z) (imgRows,imgCols) : applyMaxPooling p q zonotope (imgRows,imgCols)
+
+-- AVERAGE POOLING
+generateRowAveragePooling :: [Int] -> Int -> [Double]
+generateRowAveragePooling positions size = [if i `elem` positions then 1.0 else 0.0 | i <- [0..size-1]]
+
+averagePooling :: Int -> Int -> [[Double]] -> [Double]
+averagePooling p q x = let
+  groups = poolingGroups p q x
+  sizeX = length x * length (head x)
+  poolSize' = fromIntegral p * fromIntegral q :: Double
+  w = Data.Matrix.fromLists [generateRowAveragePooling g sizeX | g <- groups]
+  zonotope = Data.Matrix.transpose (Data.Matrix.fromLists [concat x])
+  in Data.Matrix.toList (Data.Matrix.scaleMatrix (1/poolSize') (multStd w zonotope))
+
+applySinglePointAveragePooling :: Int -> Int -> [Double] -> (Int,Int) -> [Double]
+applySinglePointAveragePooling p q zonotope (rows,cols) = let
+  x = Data.Matrix.toLists (Data.Matrix.fromList rows cols zonotope)
+  in averagePooling p q x
+
+applyAllPointsAveragePooling :: Int -> Int -> Matrix Double -> Int -> (Int,Int) -> Matrix Double
+applyAllPointsAveragePooling p q _ 0 (imgRows,imgCols) = matrix ((imgRows `div` p)*(imgCols `div` q)) 0 (const 0)
+applyAllPointsAveragePooling p q zonotope numPoints (imgRows,imgCols) = let
+  point = Data.Vector.toList (getCol numPoints zonotope)
+  avgPooledPoint = applySinglePointAveragePooling p q point (imgRows,imgCols)
+  in appendColumn (applyAllPointsMaxPooling p q zonotope (numPoints - 1) (imgRows,imgCols)) avgPooledPoint
+
+applyAveragePooling :: Int -> Int -> [Matrix Double] -> (Int,Int) -> [Matrix Double]
+applyAveragePooling _ _ [] _ = []
+applyAveragePooling p q (z:zonotope) (imgRows,imgCols) =  applyAllPointsAveragePooling p q z (ncols z) (imgRows,imgCols) : applyAveragePooling p q zonotope (imgRows,imgCols)
 
 -- RELU
 singleReluValue :: Double -> Double
@@ -203,9 +233,58 @@ singleReluValue x | x > 0 = x
 applyRelu :: [[[Double]]] -> [[[Double]]]
 applyRelu = map (map (map singleReluValue))
 
+-- RELU (SHEARING)
+getZonotopeCenter :: Zonotope -> [Double]
+getZonotopeCenter z = Data.Vector.toList (getCol 1 z)
+
+getZonotopeGenerators :: Zonotope -> Zonotope
+getZonotopeGenerators z = submatrix 1 (nrows z) 2 (ncols z) z
+
+buildMatrix :: [Double] -> Zonotope -> Zonotope
+buildMatrix center generators = fromLists (zipWith (:) center (toLists generators))
+
+upper :: Zonotope -> [Double]
+upper m = zipWith (+) c (map (sum . map abs) (Data.List.transpose g))
+  where
+    c = getZonotopeCenter m
+    g = toLists (getZonotopeGenerators m)
+
+lower :: Zonotope -> [Double]
+lower m = zipWith (-) c (map (sum . map abs) (Data.List.transpose g))
+  where
+    c = getZonotopeCenter m
+    g = toLists (getZonotopeGenerators m)
+
+findLambdaAndNRelu :: Zonotope -> ([Double], [Double])
+findLambdaAndNRelu m = (lambda, n)
+  where
+    u = upper m
+    l = lower m
+    lambda = zipWith (/) u (zipWith (-) u l)
+    n = zipWith (\ui lambdai -> (ui * (1 - lambdai)) / 2) u lambda
+
+scaleByLambdaRelu :: Zonotope -> Zonotope
+scaleByLambdaRelu m = buildMatrix scaledC (fromLists scaledGs)
+  where
+    (lambda, _) = findLambdaAndNRelu m
+    c = getZonotopeCenter m
+    g = toLists (getZonotopeGenerators m)
+    scaledC = zipWith (*) lambda c
+    scaledGs = map (zipWith (*) lambda) g
+
+composeLambdaAndNRelu :: Zonotope -> Zonotope
+composeLambdaAndNRelu m = elementwise (+) lambdaScaled (Data.Matrix.fromLists [nRow])
+  where
+    lambdaScaled = scaleByLambdaRelu m
+    (_, n) = findLambdaAndNRelu m
+    nRow = n ++ replicate (ncols m - 1) 0 ++ [head n]
+
+applyReluShearing :: Zonotope -> Zonotope
+applyReluShearing m = fromLists (map (Data.Matrix.toList . composeLambdaAndNRelu . fromLists . pure) (toLists m))
+
 -- DENSE
 -- weights x zonotope
-applyDenseLayerWeights :: Matrix (UPoly Double) -> Matrix (UPoly Double) -> Matrix (UPoly Double)
+applyDenseLayerWeights :: Matrix Double -> Matrix Double -> Matrix Double
 applyDenseLayerWeights = multStd
 
 --TESTING APPLYING CONV AND MAXPOOLING TO A TEST ZONOTOPE
@@ -223,7 +302,7 @@ readLayers filepath = do
   let layers = fromMaybe [] (decode jsonData :: Maybe [LayerInfo])
   return layers
 
-processLayers :: String -> [Matrix (UPoly Double)] -> IO [Matrix (UPoly Double)]
+processLayers :: String -> [Matrix Double] -> IO [Matrix Double]
 processLayers filepath zonotope = do
   layers <- readLayers filepath
   case layers of
@@ -242,14 +321,40 @@ processLayers filepath zonotope = do
           print finalZonotope
           return finalZonotope
 
-convertToUPolyMatrix :: Double -> Matrix Double -> Matrix (UPoly Double)
-convertToUPolyMatrix perturbation = mapPos (\_ a -> toPoly [a, perturbation])  -- Converts a -> a + 0.1 * X
+generateZonotopeFromImage :: Double -> String -> IO ([Matrix Double],Int)
+generateZonotopeFromImage perturbation filepath = do
+  jsonData <- B.readFile filepath
+  let image = fromMaybe [] (decode jsonData :: Maybe [ImageData])
+  case image of
+    [] -> do
+      putStrLn "Image data not found"
+      return ([],-1)
+    images' -> do
+      let
+        img1Class = imageClass (head images')
+        img1 = imageValues (head images')
+        (height,width,_) = imageDimensions (head images')
+        center = map (Data.Matrix.fromList (height*width) 1) (Data.List.transpose (concat img1))
+        -- creating with 1 unique generator per dimension (explained below)
+        numGenerators = length (head center)
+        identity' = Data.Matrix.fromLists [[if i == j then perturbation else 0 | j <- [0..numGenerators-1]] | i <- [0..numGenerators-1]]
+        zonotope = map (<|> identity') center
 
-convertListOfMatricesToUPoly :: Double -> [Matrix Double] -> [Matrix (UPoly Double)]
-convertListOfMatricesToUPoly perturbation = map (convertToUPolyMatrix perturbation)
+      return (zonotope,img1Class)
 
-convertImageDataToZonotope :: Double -> String -> IO ([Matrix (UPoly Double)],Int)
-convertImageDataToZonotope perturbation filepath = do
+{-
+1 unique generator per dimension:
+If zonotope is 3D and its center is (2,3,0.5), then there will be generators e1, e2 and e3 acting as follows:
+2 + 1 e1
+3 +       1 e2
+0.5 +           1 e3
+i.e
+[[2,1,0,0],
+ [3,0,1,0],
+ [0.5,0,0,1]]
+-}
+convertImageDataToZonotope :: String -> IO ([Matrix Double],Int)
+convertImageDataToZonotope filepath = do
   jsonData <- B.readFile filepath
   let image = fromMaybe [] (decode jsonData :: Maybe [ImageData])
   case image of
@@ -263,9 +368,9 @@ convertImageDataToZonotope perturbation filepath = do
         concatImg = Data.List.transpose (concat img1)
         img1Zonotope = map (Data.Matrix.fromList (height1 * width1) 1) concatImg
       let img1Class = imageClass (head images')
-      return (convertListOfMatricesToUPoly perturbation img1Zonotope,img1Class)
+      return (img1Zonotope,img1Class)
 
-parseLayers :: [LayerInfo] -> [Matrix (UPoly Double)] -> (Int,Int) -> IO [Matrix (UPoly Double)]
+parseLayers :: [LayerInfo] -> [Matrix Double] -> (Int,Int) -> IO [Matrix Double]
 parseLayers [] zonotope _ = return zonotope
 parseLayers (l:layers) zonotope (imgRows,imgCols) = do
   -- Print the layer type (name) of the current layer
@@ -279,11 +384,11 @@ parseLayers (l:layers) zonotope (imgRows,imgCols) = do
         newRows = imgRows - head kernelSize' + 1
         newCols = imgCols - head (tail kernelSize') + 1
         newZ' = applyConvolution zonotope (imgRows,imgCols) (fromMaybe [] (filters l)) (fromMaybe [] (biases l))
-        -- activation = fromMaybe [] (activationFunction l)
-        -- newZ = if activation == "relu"
-        --   then map Data.Matrix.fromLists (applyRelu (map Data.Matrix.toLists newZ'))
-        --   else newZ'
-      in parseLayers layers newZ' (newRows,newCols)
+        activation = fromMaybe [] (activationFunction l)
+        newZ = if activation == "relu"
+          then map Data.Matrix.fromLists (applyRelu (map Data.Matrix.toLists newZ'))
+          else newZ'
+      in parseLayers layers newZ (newRows,newCols)
     "<class 'keras.src.layers.pooling.max_pooling2d.MaxPooling2D'>" ->
       let poolSize' = fromMaybe [] (poolSize l)
           p = head poolSize'
@@ -291,6 +396,13 @@ parseLayers (l:layers) zonotope (imgRows,imgCols) = do
           newRows = imgRows `div` p
           newCols = imgCols `div` q
       in parseLayers layers (applyMaxPooling p q zonotope (imgRows,imgCols)) (newRows,newCols)
+    "<class 'keras.src.layers.pooling.average_pooling2d.AveragePooling2D'>" ->
+      let poolSize' = fromMaybe [] (poolSize l)
+          p = head poolSize'
+          q = head (tail poolSize')
+          newRows = imgRows `div` p
+          newCols = imgCols `div` q
+      in parseLayers layers (applyAveragePooling p q zonotope (imgRows,imgCols)) (newRows,newCols)
     "<class 'keras.src.layers.reshaping.flatten.Flatten'>" ->
       let
         newRows = 1
@@ -298,22 +410,23 @@ parseLayers (l:layers) zonotope (imgRows,imgCols) = do
       in parseLayers layers [Data.Matrix.fromList (length zonotope) (ncols (head zonotope)) (concatMap Data.Matrix.toList zonotope)] (newRows,newCols)
     "<class 'keras.src.layers.core.dense.Dense'>" ->
       let weights' = fromMaybe [] (weights l)
-          weightsMatrix = convertToUPolyMatrix 0 (Data.Matrix.transpose (Data.Matrix.fromLists weights'))
+          weightsMatrix = Data.Matrix.transpose (Data.Matrix.fromLists weights')
           zonotopeMatrix = head zonotope
           newZ' = [applyDenseLayerWeights weightsMatrix zonotopeMatrix]
           biases' = fromMaybe [] (biases l)
-          biasMatrix = convertToUPolyMatrix 0 (Data.Matrix.transpose (fromLists (replicate (ncols (head newZ')) biases')))
+          biasMatrix = Data.Matrix.transpose (fromLists (replicate (ncols (head newZ')) biases'))
           newZ'' = head newZ' + biasMatrix
-          -- activationFunction' = fromMaybe [] (activationFunction l)
-          -- newZ = if activationFunction' == "relu"
-          --   then map Data.Matrix.fromLists (applyRelu [Data.Matrix.toLists newZ''])
-          --   else [newZ'']
-      in parseLayers layers [newZ''] (imgRows,imgCols)
+          activationFunction' = fromMaybe [] (activationFunction l)
+          newZ = if activationFunction' == "relu"
+            then map Data.Matrix.fromLists (applyRelu [Data.Matrix.toLists newZ''])
+            else [newZ'']
+      in parseLayers layers newZ (imgRows,imgCols)
     "<class 'keras.src.layers.regularization.dropout.Dropout'>" ->
       parseLayers layers zonotope (imgRows,imgCols)
     _ ->
       return []
 
+-- CHECKING IF THE ARGMAX VALUE IN ALL POINTS MATCHES
 -- Function to find the index of the maximum element in a column
 maxIndexInColumn :: (Eq a, Ord a) => Matrix a -> Int -> Int
 maxIndexInColumn m colIndex =
@@ -333,28 +446,21 @@ checkMaxIndicesMatch m label =
       indices = map (maxIndexInColumn m) [1..numCols]  -- Get max indices for all columns
   in checkListMatch indices label
 
--- Evaluates a single matrix of polynomials at a given x-value
-evaluateMatrix :: Double -> Matrix (UPoly Double) -> Matrix Double
-evaluateMatrix x = mapPos (\_ p -> eval p x)
-
--- Evaluates a list of matrices at a given x-value
-evaluateListOfMatrices :: Double -> [Matrix (UPoly Double)] -> [Matrix Double]
-evaluateListOfMatrices x = map (evaluateMatrix x)
-
--- main :: IO ()
--- main = do
---   print "yes"
-main :: IO [Matrix (UPoly Double)]
+main :: IO ([Matrix Double],[Bool])
 main = do
-  putStrLn "Please enter how much perturbation you want:"
-  input <- getLine
-  let perturbation = read input :: Double
-  (testZ3,_) <- convertImageDataToZonotope perturbation "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/imageData.json"
+  -- putStrLn "Please enter how much perturbation you want:"
+  -- input <- getLine
+  -- let perturbation = read input :: Double
+  (testZ,testZlabel) <- convertImageDataToZonotope "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/imageData.json"
   let
-  --   epsilon = 0.1 :: Double
-  --   plusEpsilon = map (\m -> fromList (nrows m) 1 (map (+ epsilon) (Data.Matrix.toList m))) testZ3
-  --   minusEpsilon = map (\m -> fromList (nrows m) 1 (map (+ (-epsilon)) (Data.Matrix.toList m))) testZ3
-  --   testZ = zipWith (<|>) (zipWith (<|>) minusEpsilon testZ3) plusEpsilon
-  --   correctlyClassified = map (`checkMaxIndicesMatch` testZ3label) testZ
-  -- print (show correctlyClassified)
-  processLayers "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/layersInfo.json" testZ3
+    epsilon = 0.1 :: Double
+    plusEpsilon = map (\m -> fromList (nrows m) 1 (map (+ epsilon) (Data.Matrix.toList m))) testZ
+    minusEpsilon = map (\m -> fromList (nrows m) 1 (map (+ (-epsilon)) (Data.Matrix.toList m))) testZ
+    testZ' = zipWith (<|>) (zipWith (<|>) minusEpsilon testZ) plusEpsilon
+  finalZonotope <- processLayers "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/layersInfo.json" testZ'
+  let correctlyClassified = map (`checkMaxIndicesMatch` (testZlabel + 1)) finalZonotope
+  print correctlyClassified
+  let jsonData = encode correctlyClassified
+  B.writeFile "correctlyClassified.json" jsonData
+  putStrLn "Data written to correctlyClassified.json"
+  return (finalZonotope,correctlyClassified)
