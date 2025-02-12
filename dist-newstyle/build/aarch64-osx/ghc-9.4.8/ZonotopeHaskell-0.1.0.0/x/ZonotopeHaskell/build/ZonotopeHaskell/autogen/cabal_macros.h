@@ -10,15 +10,15 @@
   (major1) == 0 && (major2) <  1 || \
   (major1) == 0 && (major2) == 1 && (minor) <= 0)
 #endif /* MIN_VERSION_ZonotopeHaskell */
-/* package aeson-2.1.2.1 */
+/* package aeson-2.2.3.0 */
 #ifndef VERSION_aeson
-#define VERSION_aeson "2.1.2.1"
+#define VERSION_aeson "2.2.3.0"
 #endif /* VERSION_aeson */
 #ifndef MIN_VERSION_aeson
 #define MIN_VERSION_aeson(major1,major2,minor) (\
   (major1) <  2 || \
-  (major1) == 2 && (major2) <  1 || \
-  (major1) == 2 && (major2) == 1 && (minor) <= 2)
+  (major1) == 2 && (major2) <  2 || \
+  (major1) == 2 && (major2) == 2 && (minor) <= 3)
 #endif /* MIN_VERSION_aeson */
 /* package base-4.17.2.1 */
 #ifndef VERSION_base
@@ -70,16 +70,6 @@
   (major1) == 1 && (major2) <  2 || \
   (major1) == 1 && (major2) == 2 && (minor) <= 1)
 #endif /* MIN_VERSION_random */
-/* package tensors-0.1.5 */
-#ifndef VERSION_tensors
-#define VERSION_tensors "0.1.5"
-#endif /* VERSION_tensors */
-#ifndef MIN_VERSION_tensors
-#define MIN_VERSION_tensors(major1,major2,minor) (\
-  (major1) <  0 || \
-  (major1) == 0 && (major2) <  1 || \
-  (major1) == 0 && (major2) == 1 && (minor) <= 5)
-#endif /* MIN_VERSION_tensors */
 /* package vector-0.13.2.0 */
 #ifndef VERSION_vector
 #define VERSION_vector "0.13.2.0"

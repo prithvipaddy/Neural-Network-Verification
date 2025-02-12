@@ -14,6 +14,8 @@ import Data.Ord (comparing)
 import Data.Vector (toList)
 import Data.Matrix
 import Data.Maybe (fromMaybe)
+import System.Environment (getArgs)
+import Control.Monad (liftM2)
 
 type Zonotope = Matrix Double
 
@@ -446,18 +448,25 @@ checkMaxIndicesMatch m label =
       indices = map (maxIndexInColumn m) [1..numCols]  -- Get max indices for all columns
   in checkListMatch indices label
 
+cartesianProduct :: [[a]] -> [[a]]
+cartesianProduct = foldr (liftM2 (:)) [[]]
+
+-- Constraint: Input zonotope should be only 1 column
+addPerturbations :: Double -> Matrix Double -> Matrix Double
+addPerturbations perturbation zonotope = let
+  zonotopeList = Data.Matrix.toList zonotope
+  cornerPoints' = map (\x -> [x - perturbation, x + perturbation]) zonotopeList :: [[Double]]
+  cornerPoints = Data.Matrix.fromLists (cartesianProduct cornerPoints')
+  in Data.Matrix.transpose cornerPoints
+
 main :: IO ([Matrix Double],[Bool])
 main = do
-  -- putStrLn "Please enter how much perturbation you want:"
-  -- input <- getLine
-  -- let perturbation = read input :: Double
+  args <- getArgs
+  let perturbation = read (head args) :: Double
   (testZ,testZlabel) <- convertImageDataToZonotope "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/imageData.json"
   let
-    epsilon = 0.1 :: Double
-    plusEpsilon = map (\m -> fromList (nrows m) 1 (map (+ epsilon) (Data.Matrix.toList m))) testZ
-    minusEpsilon = map (\m -> fromList (nrows m) 1 (map (+ (-epsilon)) (Data.Matrix.toList m))) testZ
-    testZ' = zipWith (<|>) (zipWith (<|>) minusEpsilon testZ) plusEpsilon
-  finalZonotope <- processLayers "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/layersInfo.json" testZ'
+    perturbedZonotope = map (addPerturbations perturbation) testZ
+  finalZonotope <- processLayers "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/layersInfo.json" perturbedZonotope
   let correctlyClassified = map (`checkMaxIndicesMatch` (testZlabel + 1)) finalZonotope
   print correctlyClassified
   let jsonData = encode correctlyClassified

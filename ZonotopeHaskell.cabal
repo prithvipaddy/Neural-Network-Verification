@@ -76,15 +76,15 @@ executable ZonotopeHaskell
         -- ghc-boot,
         -- template-haskell,
         base ^>=4.17.2.1,
-        tensors,
         bytestring,
         random,
         vector,
         matrix,
         -- time ^>=1.12.2,
-        aeson ^>=2.1.0.0,
+        aeson,
         poly,
-        vector-sized
+        vector-sized,
+        -- directory
 
     -- Directories containing source files.
     hs-source-dirs:   app
