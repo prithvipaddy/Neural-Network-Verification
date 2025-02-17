@@ -448,6 +448,7 @@ checkMaxIndicesMatch m label =
       indices = map (maxIndexInColumn m) [1..numCols]  -- Get max indices for all columns
   in checkListMatch indices label
 
+-- ADDING PERTURBATIONS TO ALL DIMENSIONS (CREATING 2^N POINTS, WHERE N IS THE NUMBER OF DIMENSIONS IN THE ZONOTOPE)
 cartesianProduct :: [[a]] -> [[a]]
 cartesianProduct = foldr (liftM2 (:)) [[]]
 
