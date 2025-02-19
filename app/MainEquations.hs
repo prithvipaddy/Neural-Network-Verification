@@ -15,6 +15,8 @@ import Data.Vector (toList)
 import Data.Matrix
 import Data.Maybe (fromMaybe)
 import System.Environment (getArgs)
+import Control.Parallel (par, pseq)
+import Control.Parallel.Strategies
 
 type Zonotope = Matrix Double
 
@@ -86,9 +88,10 @@ applySingleChannelConvolution zonotope (inpImgRows,inpImgCols) kernel = let
 applyConvolutionPerFilter' :: [Matrix Double] -> (Int,Int) -> [[[Double]]] -> Int -> Int -> Matrix Double
 applyConvolutionPerFilter' [] _ _ zRowSize zColSize = Data.Matrix.zero zRowSize zColSize
 applyConvolutionPerFilter' _ _ [] zRowSize zColSize = Data.Matrix.zero zRowSize zColSize
-applyConvolutionPerFilter' (z:zonotope) (inpImgRows,inpImgCols) (k:kernel) zRowSize zColSize  = let
-    newZ = applySingleChannelConvolution z (inpImgRows,inpImgCols) k
-    in newZ + applyConvolutionPerFilter' zonotope (inpImgRows,inpImgCols) kernel zRowSize zColSize
+applyConvolutionPerFilter' (z:zonotope) (inpImgRows,inpImgCols) (k:kernel) zRowSize zColSize = let
+        newZ = applySingleChannelConvolution z (inpImgRows, inpImgCols) k  
+        rest = applyConvolutionPerFilter' zonotope (inpImgRows, inpImgCols) kernel zRowSize zColSize
+    in newZ `par` rest `pseq` (newZ + rest)  -- Spark newZ in parallel, then force rest, and finally add them
 
 applyConvolutionPerFilter :: [Matrix Double] -> (Int,Int) -> [[[Double]]] -> Double -> Matrix Double
 applyConvolutionPerFilter zonotope (inpImgRows,inpImgCols) kernel bias = let
@@ -101,7 +104,9 @@ applyConvolution :: [Matrix Double] -> (Int,Int) -> [[[[Double]]]] -> [Double] -
 applyConvolution _ _ [] _ = []
 applyConvolution _ _ _ [] = []
 -- length of kernel and bias should be same
-applyConvolution zonotope (inpImgRows,inpImgCols) (k:kernel) (b:bias) = applyConvolutionPerFilter zonotope (inpImgRows,inpImgCols) k b : applyConvolution zonotope (inpImgRows,inpImgCols) kernel bias
+applyConvolution zonotope (inpImgRows,inpImgCols) kernel bias = let
+  results = zipWith (applyConvolutionPerFilter zonotope (inpImgRows, inpImgCols)) kernel bias
+  in results `using` parList rdeepseq
 
 -- MAXPOOLING (from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8418593)
 -- Generate the list of indices grouped for maxpooling
@@ -224,7 +229,9 @@ applyAllPointsAveragePooling p q zonotope numPoints (imgRows,imgCols) = let
 
 applyAveragePooling :: Int -> Int -> [Matrix Double] -> (Int,Int) -> [Matrix Double]
 applyAveragePooling _ _ [] _ = []
-applyAveragePooling p q (z:zonotope) (imgRows,imgCols) =  applyAllPointsAveragePooling p q z (ncols z) (imgRows,imgCols) : applyAveragePooling p q zonotope (imgRows,imgCols)
+applyAveragePooling p q zonotope (imgRows,imgCols) = let
+  results = map (\z -> applyAllPointsAveragePooling p q z (ncols z) (imgRows, imgCols)) zonotope
+  in results `using` parList rdeepseq
 
 -- RELU (SHEARING)
 getZonotopeCenter :: [Double] -> Double
@@ -269,7 +276,9 @@ applyReluPerDimension eq = let
       composeLambdaAndNRelu eq
 
 applyRelu :: [[[Double]]] -> [[[Double]]]
-applyRelu = map (map applyReluPerDimension)
+applyRelu input = let
+  result = map (map applyReluPerDimension) input
+  in result `using` parList (parList rdeepseq)
 
 -- DENSE
 -- weights x zonotope
@@ -417,23 +426,11 @@ parseLayers (l:layers) zonotope (imgRows,imgCols) = do
 
 -- CHECKING IF THE ARGMAX VALUE IN ALL POINTS MATCHES
 -- Function to find the index of the maximum element in a column
-maxIndexInColumn :: (Eq a, Ord a) => Matrix a -> Int -> Int
-maxIndexInColumn m colIndex =
-  let column = getCol colIndex m
-      maxVal = maximum column
-      rowIndex = fst . head $ filter ((== maxVal) . snd) (zip [1..] (Data.Vector.toList column))
-  in rowIndex
-
-checkListMatch :: [Int] -> Int -> Bool
-checkListMatch [] _ = True
-checkListMatch (l:ls) label = (l == label) && checkListMatch ls label
-
--- Function to check if the maximum index in all columns matches
-checkMaxIndicesMatch :: Ord a => Matrix a -> Int -> Bool
-checkMaxIndicesMatch m label =
-  let numCols = ncols m
-      indices = map (maxIndexInColumn m) [1..numCols]  -- Get max indices for all columns
-  in checkListMatch indices label
+checkArgMax :: [(Double,Double)] -> Int -> Bool
+checkArgMax zonotope label = let
+  (lowerBoundForExpectedLabel,_) = zonotope !! label
+  otherTuples = take label zonotope ++ drop (label + 1) zonotope
+  in all (\(_, y) -> y < lowerBoundForExpectedLabel) otherTuples
 
 -- CREATING EQUATIONS FOR EACH DIMENSION (1 + 0 E1 + 1 E2 BECOMES [1,0,1])
 {-
@@ -467,15 +464,16 @@ findBoundsPerDimension equation = let
   lowerBound' = center - sum (map abs generators)
   in (lowerBound',upperBound')
 
-main :: IO ([Matrix Double],[Bool])
+main :: IO ([[(Double,Double)]],[Bool])
 main = do
   args <- getArgs
   let perturbation = read (head args) :: Double
   (testZ,testZlabel) <- convertImageDataToZonotope "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/imageData.json"
   let
     perturbedZonotope = map (`createEquations` perturbation) testZ
-  finalZonotope <- processLayers "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/layersInfo.json" perturbedZonotope
-  let correctlyClassified = map (`checkMaxIndicesMatch` (testZlabel + 1)) finalZonotope
+  finalZonotopeEquations <- processLayers "/Users/prithvi/Documents/Krea/Capstone/AbstractVerification/Zonotope/haskell/app/layersInfo.json" perturbedZonotope
+  let finalZonotope = map solveEquations finalZonotopeEquations
+  let correctlyClassified = map (`checkArgMax` testZlabel) finalZonotope
   print correctlyClassified
   let jsonData = encode correctlyClassified
   B.writeFile "correctlyClassified.json" jsonData
