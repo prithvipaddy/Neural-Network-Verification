@@ -20,6 +20,16 @@
   (major1) == 2 && (major2) <  2 || \
   (major1) == 2 && (major2) == 2 && (minor) <= 3)
 #endif /* MIN_VERSION_aeson */
+/* package array-0.5.4.0 */
+#ifndef VERSION_array
+#define VERSION_array "0.5.4.0"
+#endif /* VERSION_array */
+#ifndef MIN_VERSION_array
+#define MIN_VERSION_array(major1,major2,minor) (\
+  (major1) <  0 || \
+  (major1) == 0 && (major2) <  5 || \
+  (major1) == 0 && (major2) == 5 && (minor) <= 4)
+#endif /* MIN_VERSION_array */
 /* package base-4.17.2.1 */
 #ifndef VERSION_base
 #define VERSION_base "4.17.2.1"
@@ -40,9 +50,9 @@
   (major1) == 0 && (major2) <  11 || \
   (major1) == 0 && (major2) == 11 && (minor) <= 5)
 #endif /* MIN_VERSION_bytestring */
-/* package matrix-0.3.6.3 */
+/* package matrix-0.3.6.4 */
 #ifndef VERSION_matrix
-#define VERSION_matrix "0.3.6.3"
+#define VERSION_matrix "0.3.6.4"
 #endif /* VERSION_matrix */
 #ifndef MIN_VERSION_matrix
 #define MIN_VERSION_matrix(major1,major2,minor) (\
@@ -60,26 +70,6 @@
   (major1) == 3 && (major2) <  2 || \
   (major1) == 3 && (major2) == 2 && (minor) <= 2)
 #endif /* MIN_VERSION_parallel */
-/* package poly-0.5.1.0 */
-#ifndef VERSION_poly
-#define VERSION_poly "0.5.1.0"
-#endif /* VERSION_poly */
-#ifndef MIN_VERSION_poly
-#define MIN_VERSION_poly(major1,major2,minor) (\
-  (major1) <  0 || \
-  (major1) == 0 && (major2) <  5 || \
-  (major1) == 0 && (major2) == 5 && (minor) <= 1)
-#endif /* MIN_VERSION_poly */
-/* package random-1.2.1.3 */
-#ifndef VERSION_random
-#define VERSION_random "1.2.1.3"
-#endif /* VERSION_random */
-#ifndef MIN_VERSION_random
-#define MIN_VERSION_random(major1,major2,minor) (\
-  (major1) <  1 || \
-  (major1) == 1 && (major2) <  2 || \
-  (major1) == 1 && (major2) == 2 && (minor) <= 1)
-#endif /* MIN_VERSION_random */
 /* package vector-0.13.2.0 */
 #ifndef VERSION_vector
 #define VERSION_vector "0.13.2.0"
@@ -90,16 +80,6 @@
   (major1) == 0 && (major2) <  13 || \
   (major1) == 0 && (major2) == 13 && (minor) <= 2)
 #endif /* MIN_VERSION_vector */
-/* package vector-sized-1.6.1 */
-#ifndef VERSION_vector_sized
-#define VERSION_vector_sized "1.6.1"
-#endif /* VERSION_vector_sized */
-#ifndef MIN_VERSION_vector_sized
-#define MIN_VERSION_vector_sized(major1,major2,minor) (\
-  (major1) <  1 || \
-  (major1) == 1 && (major2) <  6 || \
-  (major1) == 1 && (major2) == 6 && (minor) <= 1)
-#endif /* MIN_VERSION_vector_sized */
 
 /* tool gcc-16.0.0 */
 #ifndef TOOL_VERSION_gcc

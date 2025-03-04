@@ -70,21 +70,13 @@ executable ZonotopeHaskell
 
     -- Other library packages from which modules are imported.
     build-depends:
-        -- liquid-base,
-        -- liquidhaskell == 0.9.10.1,
-        -- liquidhaskell-boot == 0.9.10.1,
-        -- ghc-boot,
-        -- template-haskell,
-        base ^>=4.17.2.1,
+        base,
         bytestring,
-        random,
         vector,
         matrix,
-        -- time ^>=1.12.2,
         aeson,
-        poly,
-        vector-sized,
-        parallel
+        parallel,
+        array
 
     -- Directories containing source files.
     hs-source-dirs:   app
